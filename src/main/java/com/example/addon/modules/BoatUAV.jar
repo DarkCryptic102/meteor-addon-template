@@ -8,6 +8,7 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
+
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.vehicle.BoatEntity;
@@ -18,250 +19,200 @@ import net.minecraft.network.packet.c2s.play.VehicleMoveC2SPacket;
 import net.minecraft.util.math.Vec3d;
 
 public class BoatUAV extends Module {
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
     public final Setting<Boolean> autoTrack = sgGeneral.add(new BoolSetting.Builder()
-        .name("AutoTrack")
-        .description("Automatically tracks the closest player's X and Z coordinates.")
+        .name("auto-track")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Integer> charge = sgGeneral.add(new IntSetting.Builder()
         .name("charge")
-        .description("How long to charge the bow before releasing in ticks.")
         .defaultValue(5)
         .range(5, 20)
-        .sliderRange(5, 20)
         .build()
     );
 
     public final Setting<Double> maxYDelta = sgGeneral.add(new DoubleSetting.Builder()
         .name("max-y-delta")
-        .description("Maximum vertical movement per tick.")
         .defaultValue(5.0)
         .range(0.1, 100.0)
-        .sliderRange(0.1, 100.0)
         .build()
     );
 
     public final Setting<Double> maxXZDelta = sgGeneral.add(new DoubleSetting.Builder()
         .name("max-xz-delta")
-        .description("Maximum horizontal movement per tick.")
         .defaultValue(0.5)
         .range(0.05, 15.0)
-        .sliderRange(0.05, 15.0)
         .build()
     );
 
     public final Setting<Integer> bowSpamDelay = sgGeneral.add(new IntSetting.Builder()
         .name("bow-spam-delay")
-        .description("Delay between bow releases in ticks.")
         .defaultValue(1)
         .range(1, 20)
-        .sliderRange(1, 20)
         .build()
     );
 
     public final Setting<Integer> xzUpdateDelay = sgGeneral.add(new IntSetting.Builder()
         .name("xz-delay")
-        .description("Number of ticks between XZ movement updates.")
         .defaultValue(2)
         .range(1, 20)
-        .sliderRange(1, 20)
         .build()
     );
 
-
     private static final MinecraftClient mc = MinecraftClient.getInstance();
-    private enum State { MOVING_UP_Y_1, MOVING_UP_Y_2, MOVING_DOWN_Y }
-    private State currentState = State.MOVING_UP_Y_1;
-    private PlayerEntity targetPlayer = null;
-    private int xzTickCounter = 0;
-    private Vec3d lastSentPos = null;
-    private double yTarget = 0.0;
-    private boolean wasBow = false;
-    private int bowTickCounter = 0;
+
+    private enum State { UP1, UP2, DOWN }
+    private State state = State.UP1;
+
+    private PlayerEntity target;
+    private Vec3d lastPos;
+    private double yTarget;
+    private int xzTick;
+    private int bowTick;
 
     public BoatUAV() {
-        super(Main.CATEGORY, "BoatUAV", "BOAT GO CRAZYYYYYY WOOHOOOO VELOCITY KILLA 3000");
+        super(Main.CATEGORY, "boat-uav", "Boat controller module (1.21.11 port).");
     }
 
     @Override
     public void onActivate() {
-        if (mc.player == null || mc.world == null || mc.player.networkHandler == null) {
-            ChatUtils.error("p/w/n handler is null, deactivating.");
+        if (mc.player == null || mc.world == null) {
             toggle();
             return;
         }
 
         if (!(mc.player.getVehicle() instanceof BoatEntity)) {
-            ChatUtils.error("You must be in a boat to activate.");
+            ChatUtils.error("You must be in a boat.");
             toggle();
             return;
         }
 
-        targetPlayer = findClosestPlayer();
-        if (targetPlayer == null) {
-            ChatUtils.error("No target player found, deactivating.");
+        target = findClosest();
+        if (target == null) {
+            ChatUtils.error("No target found.");
             toggle();
             return;
         }
 
-        currentState = State.MOVING_UP_Y_1;
-        lastSentPos = mc.player.getPos();
-        yTarget = targetPlayer.getY() + 50;
-        wasBow = false;
-        bowTickCounter = 0;
+        state = State.UP1;
+        lastPos = mc.player.getPos();
+        yTarget = target.getY() + 50;
     }
 
     @Override
     public void onDeactivate() {
-        targetPlayer = null;
-        currentState = State.MOVING_UP_Y_1;
-        lastSentPos = null;
-        yTarget = 0.0;
-        setPressed(false);
-        wasBow = false;
-        bowTickCounter = 0;
-        ChatUtils.info("Module deactivated.");
+        target = null;
+        lastPos = null;
+        state = State.UP1;
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
-        if (!isActive() || mc.player == null || mc.world == null || mc.player.networkHandler == null) {
-            ChatUtils.error("p/w/n handler is null, deactivating.");
-            toggle();
-            return;
+        if (mc.player == null || mc.world == null) return;
+        if (!(mc.player.getVehicle() instanceof BoatEntity boat)) return;
+
+        if (target == null || !target.isAlive()) {
+            target = findClosest();
+            if (target == null) return;
         }
 
-        if (!(mc.player.getVehicle() instanceof BoatEntity)) {
-            ChatUtils.error("Not in a boat, deactivating.");
-            toggle();
-            return;
+        Vec3d targetPos = target.getPos();
+
+        double targetY = switch (state) {
+            case UP1 -> yTarget;
+            case UP2 -> targetPos.y + 80;
+            case DOWN -> targetPos.y + 10;
+        };
+
+        move(boat, targetPos, targetY);
+
+        if (++xzTick >= xzUpdateDelay.get()) {
+            moveXZ(boat, targetPos);
+            xzTick = 0;
         }
 
-        BoatEntity boat = (BoatEntity) mc.player.getVehicle();
-        if (lastSentPos == null) {
-            lastSentPos = boat.getPos();
+        handleBow();
+    }
+
+    private void move(BoatEntity boat, Vec3d targetPos, double targetY) {
+        Vec3d pos = boat.getPos();
+
+        double dy = targetY - pos.y;
+        double moveY = Math.max(-maxYDelta.get(), Math.min(maxYDelta.get(), dy));
+
+        Vec3d newPos = new Vec3d(pos.x, pos.y + moveY, pos.z);
+
+        if (Math.abs(dy) < maxYDelta.get()) {
+            state = switch (state) {
+                case UP1 -> State.UP2;
+                case UP2 -> State.DOWN;
+                case DOWN -> State.UP1;
+            };
         }
 
-        if (targetPlayer == null || !targetPlayer.isAlive() || !mc.world.getPlayers().contains(targetPlayer)) {
-            targetPlayer = findClosestPlayer();
-            if (targetPlayer == null) {
-                ChatUtils.error("No target player found, deactivating.");
-                toggle();
-                return;
-            }
+        sendBoat(boat, newPos);
+    }
 
-            if (currentState == State.MOVING_UP_Y_1) {
-                yTarget = targetPlayer.getY() + 50;
-            }
-        }
+    private void moveXZ(BoatEntity boat, Vec3d targetPos) {
+        Vec3d pos = boat.getPos();
 
-        if (!autoTrack.get()) return;
+        double dx = targetPos.x - pos.x;
+        double dz = targetPos.z - pos.z;
 
-        Vec3d targetPos = targetPlayer.getPos();
-        double finalYTarget = currentState == State.MOVING_UP_Y_2 ? targetPos.y + 80 : targetPos.y + 10;
+        dx = Math.max(-maxXZDelta.get(), Math.min(maxXZDelta.get(), dx));
+        dz = Math.max(-maxXZDelta.get(), Math.min(maxXZDelta.get(), dz));
 
-        handleMovement(boat, targetPos, finalYTarget);
+        sendBoat(boat, new Vec3d(pos.x + dx, pos.y, pos.z + dz));
+    }
 
-        if (xzTickCounter++ >= xzUpdateDelay.get()) {
-            updateXZ(boat, targetPos);
-            xzTickCounter = 0;
-        }
+    private void sendBoat(BoatEntity boat, Vec3d pos) {
+        boat.updatePosition(pos.x, pos.y, pos.z);
+        mc.player.networkHandler.sendPacket(new VehicleMoveC2SPacket(boat));
+        lastPos = pos;
+    }
 
-        if (currentState == State.MOVING_DOWN_Y) {
-            if (!mc.player.getAbilities().creativeMode && !InvUtils.find(itemStack -> itemStack.getItem() instanceof ArrowItem).found()) {
-                ChatUtils.error("No arrows found in inventory, stopping bow spam.");
-                toggle();
-                return;
-            }
+    private void handleBow() {
+        if (!mc.player.getAbilities().creative &&
+            !InvUtils.find(i -> i.getItem() instanceof ArrowItem).found()) return;
 
-            boolean isBow = mc.player.getMainHandStack().getItem() == Items.BOW;
-            if (!isBow && wasBow) setPressed(false);
+        if (mc.player.getMainHandStack().getItem() != Items.BOW) return;
 
-            wasBow = isBow;
-            if (!isBow) return;
+        mc.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.Full(
+            mc.player.getX(),
+            mc.player.getY(),
+            mc.player.getZ(),
+            mc.player.getYaw(),
+            90f,
+            mc.player.isOnGround()
+        ));
 
-            mc.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                mc.player.getYaw(), 90.0f, mc.player.isOnGround(), false
-            ));
+        if (bowTick-- > 0) return;
 
-            if (bowTickCounter > 0) {
-                bowTickCounter--;
-                return;
-            }
-
-            if (mc.player.getItemUseTime() >= charge.get()) {
-                mc.interactionManager.stopUsingItem(mc.player);
-                bowTickCounter = bowSpamDelay.get();
-            } else {
-                setPressed(true);
-            }
-        } else {
-            setPressed(false);
+        if (mc.player.getItemUseTime() >= charge.get()) {
+            mc.interactionManager.stopUsingItem(mc.player);
+            bowTick = bowSpamDelay.get();
         }
     }
 
-    private void updateXZ(BoatEntity boat, Vec3d targetPos) {
-        double xDelta = targetPos.x - lastSentPos.x;
-        double zDelta = targetPos.z - lastSentPos.z;
+    private PlayerEntity findClosest() {
+        PlayerEntity best = null;
+        double dist = Double.MAX_VALUE;
 
-        double moveX = Math.max(-maxXZDelta.get(), Math.min(maxXZDelta.get(), xDelta));
-        double moveZ = Math.max(-maxXZDelta.get(), Math.min(maxXZDelta.get(), zDelta));
+        for (PlayerEntity p : mc.world.getPlayers()) {
+            if (p == mc.player || !p.isAlive()) continue;
+            if (!Friends.get().shouldAttack(p)) continue;
 
-        Vec3d newXZPos = new Vec3d(lastSentPos.x + moveX, lastSentPos.y, lastSentPos.z + moveZ);
-        sendMovePacket(boat, newXZPos);
-    }
-
-
-    private void handleMovement(BoatEntity boat, Vec3d targetPos, double targetY) {
-        double currentY = lastSentPos.y;
-        double yDelta = (currentState == State.MOVING_UP_Y_1 ? yTarget : targetY) - currentY;
-        double moveY = Math.max(-maxYDelta.get(), Math.min(maxYDelta.get(), yDelta));
-
-        Vec3d newPos = new Vec3d(lastSentPos.x, currentY + moveY, lastSentPos.z);
-
-        if (Math.abs(yDelta) < maxYDelta.get()) {
-            switch (currentState) {
-                case MOVING_UP_Y_1 -> {
-                    currentState = State.MOVING_UP_Y_2;
-                    yTarget = targetPos.y + 80;
-                }
-                case MOVING_UP_Y_2 -> currentState = State.MOVING_DOWN_Y;
-                case MOVING_DOWN_Y -> {
-                    currentState = State.MOVING_UP_Y_1;
-                    yTarget = targetPos.y + 40;
-                }
+            double d = mc.player.distanceTo(p);
+            if (d < dist) {
+                dist = d;
+                best = p;
             }
         }
 
-        sendMovePacket(boat, newPos);
-    }
-
-
-    private void sendMovePacket(BoatEntity boat, Vec3d newPos) {
-        mc.player.networkHandler.sendPacket(new VehicleMoveC2SPacket(newPos, boat.getYaw(), boat.getPitch(), false));
-        lastSentPos = newPos;
-    }
-
-    private PlayerEntity findClosestPlayer() {
-        if (mc.world == null || mc.player == null) return null;
-        PlayerEntity closest = null;
-        double closestDistance = Double.MAX_VALUE;
-        for (PlayerEntity player : mc.world.getPlayers()) {
-            if (player != mc.player && !player.isSpectator() && player.isAlive() && Friends.get().shouldAttack(player)) {
-                double distance = mc.player.getPos().distanceTo(player.getPos());
-                if (distance < closestDistance) {
-                    closest = player;
-                    closestDistance = distance;
-                }
-            }
-        }
-        return closest;
-    }
-
-    private void setPressed(boolean pressed) {
-        mc.options.useKey.setPressed(pressed);
+        return best;
     }
 }
