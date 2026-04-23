@@ -7,10 +7,9 @@ import meteordevelopment.meteorclient.systems.hud.HudRenderer;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 
 public class HudExample extends HudElement {
-    public static final HudElementInfo<HudExample> INFO =
-        new HudElementInfo<>(AddonTemplate.HUD_GROUP, "example", "HUD element example.", HudExample::new);
 
-    private double tick = 0;
+    public static final HudElementInfo<HudExample> INFO =
+        new HudElementInfo<>(AddonTemplate.HUD_GROUP, "dyselexia", "HUD element.", HudExample::new);
 
     public HudExample() {
         super(INFO);
@@ -18,31 +17,35 @@ public class HudExample extends HudElement {
 
     @Override
     public void render(HudRenderer renderer) {
-        String text = "Dyselexia";
+        String text = "D Y S E L E X I A";
 
-        // Animation (smooth up-down movement)
-        tick += 0.05;
-        double offsetY = Math.sin(tick) * 5; // bounce effect
+        double scale = 2.0;
 
-        double textWidth = renderer.textWidth(text, true);
-        double textHeight = renderer.textHeight(true);
+        double width = renderer.textWidth(text, true) * scale;
+        double height = renderer.textHeight(true) * scale;
 
-        // Center of screen
-        double centerX = mc.getWindow().getScaledWidth() / 2.0;
-        double centerY = mc.getWindow().getScaledHeight() / 2.0;
+        double xPos = x;
+        double yPos = y;
 
-        double drawX = centerX - textWidth / 2;
-        double drawY = centerY - textHeight / 2 + offsetY;
+        // Blue background (client style bar)
+        renderer.quad(
+            xPos - 4,
+            yPos - 4,
+            width + 8,
+            height + 8,
+            new Color(0, 90, 255, 180)
+        );
 
-        setSize(textWidth, textHeight);
+        // White "Impact-style" text (bold feel via scale + spacing)
+        renderer.text(
+            text,
+            xPos,
+            yPos,
+            new Color(255, 255, 255, 255),
+            true,
+            scale
+        );
 
-        // Blue color (RGB)
-        Color blue = new Color(0, 120, 255, 255);
-
-        // Optional subtle background
-        renderer.quad(drawX - 2, drawY - 2, textWidth + 4, textHeight + 4, new Color(0, 0, 0, 80));
-
-        // Draw animated text
-        renderer.text(text, drawX, drawY, blue, true);
+        setSize(width, height);
     }
 }
