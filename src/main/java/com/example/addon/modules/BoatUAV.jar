@@ -183,16 +183,9 @@ public class BoatUAV extends Module {
             wasBow = isBow;
             if (!isBow) return;
 
-mc.player.networkHandler.sendPacket(
-    new PlayerMoveC2SPacket.Full(
-        mc.player.getX(),
-        mc.player.getY(),
-        mc.player.getZ(),
-        mc.player.getYaw(),
-        90.0f,
-        mc.player.isOnGround()
-    )
-);
+            mc.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                mc.player.getYaw(), 90.0f, mc.player.isOnGround(), false
+            ));
 
             if (bowTickCounter > 0) {
                 bowTickCounter--;
@@ -248,8 +241,7 @@ mc.player.networkHandler.sendPacket(
 
 
     private void sendMovePacket(BoatEntity boat, Vec3d newPos) {
-        boat.updatePosition(newPos.x, newPos.y, newPos.z);
-        mc.player.networkHandler.sendPacket(new VehicleMoveC2SPacket(boat));
+        mc.player.networkHandler.sendPacket(new VehicleMoveC2SPacket(newPos, boat.getYaw(), boat.getPitch(), false));
         lastSentPos = newPos;
     }
 
