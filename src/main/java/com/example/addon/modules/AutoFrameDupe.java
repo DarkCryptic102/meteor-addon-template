@@ -1,3 +1,8 @@
+/*
+ * This file is part of Meteor Satellite Addon (https://github.com/crazycat256/meteor-satellite-addon).
+ * Copyright (c) crazycat256.
+ */
+
 package fr.crazycat256.satellite.modules;
 
 import fr.crazycat256.satellite.Addon;
@@ -164,7 +169,7 @@ public class AutoFrameDupe extends Module {
     private long startTime = 0;
 
     public AutoFrameDupe() {
-        super(Addon.CATEGORY, "FrameDuper", "Automate Frame Dupes on 6b6t.");
+        super(Addon.CATEGORY, "auto-frame-dupe", "Automate Cafouillage item frame dupe.");
     }
 
     @Override
